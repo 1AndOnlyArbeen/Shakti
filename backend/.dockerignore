@@ -1,0 +1,30 @@
+# Keeps the build context small and secrets out of the image.
+# The production target COPYs the whole directory, so this file is what stops
+# .env and 200MB of node_modules from being baked in.
+
+node_modules
+npm-debug.log*
+.npm
+
+# Secrets: compose injects these at runtime via env_file instead.
+.env
+.env.*
+!.env.sample
+
+.git
+.gitignore
+.dockerignore
+Dockerfile
+
+# Uploaded documents are runtime data, not build input.
+public/temp/*
+public/docs/*
+!public/**/.gitkeep
+
+test
+coverage
+*.md
+.prettierrc
+.prettierignore
+.vscode
+.idea

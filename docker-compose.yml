@@ -1,0 +1,175 @@
+# Tempu — local development stack.
+#
+#   make up                  start mongo + backend        (http://localhost:8002)
+#   make logs                tail the backend
+#   make tools               + mongo-express DB browser   (http://localhost:8081)
+#   make prod                run the production image locally
+#   make down                stop, keep data
+#   make reset               stop and WIPE the database
+#
+# Plain compose equivalents are in the Makefile if you prefer typing them out.
+# Compose-level knobs (ports, versions, credentials) live in .env.docker —
+# copy .env.docker.sample to .env.docker to override any of the defaults below.
+
+name: tempu
+
+# ---------------------------------------------------------------------------
+# Shared building blocks. YAML anchors keep the service definitions honest:
+# log rotation and restart policy are declared once, not copy-pasted.
+# ---------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: json-file
+  options:
+    # Without this, a crash-looping container fills the disk with JSON logs.
+    max-size: '10m'
+    max-file: '3'
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  logging: *default-logging
+  networks: [tempu]
+  # PID 1 in a container does not reap zombies or forward SIGTERM by default.
+  # This gives us a real init, so Ctrl-C stops things promptly and cleanly.
+  init: true
+
+services:
+  # -------------------------------------------------------------------------
+  mongo:
+    <<: *service-defaults
+    image: mongo:${MONGO_VERSION:-7}
+    container_name: tempu-mongo
+    ports:
+      # Bound to loopback explicitly — `- '27017:27017'` would listen on every
+      # interface and expose an unauthenticated database to your whole network.
+      - '127.0.0.1:${MONGO_PORT:-27017}:27017'
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    healthcheck:
+      # The backend rethrows on a failed connect and calls process.exit(1), so
+      # it must not start before Mongo answers. depends_on waits on this.
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.runCommand({ping:1}).ok']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          # Mongo will happily map most of your RAM for its cache. On a dev box
+          # that is the difference between a slow laptop and a usable one.
+          memory: ${MONGO_MEMORY_LIMIT:-1g}
+
+  # -------------------------------------------------------------------------
+  backend:
+    <<: *service-defaults
+    build:
+      context: ./backend
+      target: development
+      # Reuse layers from a previous image instead of rebuilding cold.
+      cache_from:
+        - tempu-backend:dev
+    image: tempu-backend:dev
+    container_name: tempu-backend
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${BACKEND_PORT:-8002}:8002'
+    env_file:
+      # All 24 of your existing keys — secrets stay in backend/.env, never here.
+      - ./backend/.env
+    environment:
+      # Only the values that must differ inside a container. `mongo` is the
+      # service name, resolved by compose's DNS on the tempu network.
+      MONGODB_URI: mongodb://mongo:27017
+      PORT: 8002
+      NODE_ENV: development
+      # ragAutostart.js would spawn a detached uvicorn, and there is no Python
+      # in this image. Its skipReason() honours this flag cleanly.
+      RAG_AUTOSTART: 'false'
+      RAG_SERVICE_URL: http://host.docker.internal:8100
+      OLLAMA_HOST: http://host.docker.internal:11434
+    volumes:
+      # Live reload: nodemon sees host edits.
+      - ./backend:/app
+      # Anonymous volume so the container's Linux-built node_modules is not
+      # shadowed by the host's — bcrypt is native and the two are not portable.
+      - /app/node_modules
+    healthcheck:
+      # Hits the real /health route (app.js:136).
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:8002/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    extra_hosts:
+      # Makes host.docker.internal resolve on Linux, so the container can reach
+      # the RAG service on :8100 and Ollama on :11434 running on your machine.
+      - 'host.docker.internal:host-gateway'
+
+  # -------------------------------------------------------------------------
+  # Production image, run locally. `make prod` — off by default.
+  backend-prod:
+    <<: *service-defaults
+    profiles: [prod]
+    build:
+      context: ./backend
+      target: production
+    image: tempu-backend:prod
+    container_name: tempu-backend-prod
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${BACKEND_PROD_PORT:-8003}:8002'
+    env_file:
+      - ./backend/.env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      PORT: 8002
+      NODE_ENV: production
+      RAG_AUTOSTART: 'false'
+      RAG_SERVICE_URL: http://host.docker.internal:8100
+    # No source mount: the image is the artifact. Only uploads persist.
+    volumes:
+      - backend-uploads:/app/public
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:8002/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  # -------------------------------------------------------------------------
+  # Web DB browser. `make tools` — off by default.
+  mongo-express:
+    <<: *service-defaults
+    profiles: [tools]
+    image: mongo-express:1.0.2
+    container_name: tempu-mongo-express
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${MONGO_EXPRESS_PORT:-8081}:8081'
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
+      ME_CONFIG_BASICAUTH_USERNAME: ${ME_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_PASSWORD:-admin}
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: 'true'
+
+networks:
+  tempu:
+    name: tempu-net
+    driver: bridge
+
+volumes:
+  mongo-data:
+    name: tempu-mongo-data
+  mongo-config:
+    name: tempu-mongo-config
+  backend-uploads:
+    name: tempu-backend-uploads

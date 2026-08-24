@@ -1,0 +1,7 @@
+# Compose-level overrides — may hold ports and mongo-express credentials.
+# The .sample is tracked; the real file is not.
+.env.docker
+
+# OS / editor noise
+.DS_Store
+*.swp
