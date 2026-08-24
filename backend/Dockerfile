@@ -32,19 +32,27 @@ RUN --mount=type=cache,target=/root/.npm \
 # ---------- dev-deps: adds nodemon, prettier, etc. ------------------------
 FROM base AS dev-deps
 COPY package*.json ./
+# NODE_ENV=production is inherited from base, and npm honours it by skipping
+# devDependencies — which would silently leave nodemon out of the dev image.
+# --include=dev overrides that regardless of NODE_ENV.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci --include=dev
 
 # ---------- development ---------------------------------------------------
 FROM base AS development
 ENV NODE_ENV=development
-COPY --from=dev-deps /app/node_modules ./node_modules
+# --chown for the same reason as the web image: compose seeds the anonymous
+# node_modules volume from here, ownership included, and the app runs as node.
+COPY --from=dev-deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node . .
 # multer's diskStorage does not create its destination and throws if missing.
 RUN mkdir -p public/temp public/docs && chown -R node:node public
 USER node
 EXPOSE 8002
-CMD ["npm", "run", "dev"]
+# npx, not `npm run dev`: npm does not forward SIGTERM to its child, so the
+# app's graceful-shutdown handler never ran and `docker stop` fell back to
+# SIGKILL. --signal SIGTERM makes nodemon pass the signal through to node.
+CMD ["npx", "nodemon", "--signal", "SIGTERM", "src/index.js"]
 
 # ---------- production ---------------------------------------------------
 FROM base AS production

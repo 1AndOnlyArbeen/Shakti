@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+.venv
+venv
+.env
+.env.*
+!.env.sample
+# Vector store and uploaded documents are runtime state, mounted as a volume.
+data
+*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.md
+node_modules
+package.json

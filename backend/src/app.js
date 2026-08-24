@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -7,6 +8,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { errorMiddleware } from './middlewares/error.middleware.js';
 import { apiLogger } from './middlewares/apiLogger.middleware.js';
+import { getRedis, isRedisReady, isRedisConfigured } from './utils/redis.js';
 
 import { authRouter } from './routes/auth.route.js';
 import { userRouter } from './routes/user.route.js';
@@ -26,20 +28,88 @@ import { supplierRouter } from './routes/supplier.route.js';
 
 const app = express();
 
-// Simple in-memory rate limiter
+// Rate limiter with two backends.
+//
+// Redis when REDIS_URL is set, the in-process Map otherwise. The Map is fine for
+// a single dev process but wrong in two ways once you run more than one: each
+// instance counts separately (so N instances means N times the real limit), and
+// the counters reset on every deploy. Redis makes the window shared and durable.
+//
+// The fallback is not a degraded mode you need to think about — if Redis is
+// unreachable mid-request we simply use the Map for that request. Rate limiting
+// must never be the reason a login fails.
 const rateLimitMap = new Map();
+
+// The Map used to grow without bound: one entry per ip+path, never deleted.
+// Sweep expired records so long uptimes do not leak memory.
+const RATE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const sweepTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of rateLimitMap) {
+        if (now > record.resetAt) rateLimitMap.delete(key);
+    }
+}, RATE_SWEEP_INTERVAL_MS);
+// Do not hold the event loop open on shutdown.
+sweepTimer.unref();
+
+function hitInMemory(key, windowMs, max) {
+    const now = Date.now();
+    const record = rateLimitMap.get(key) || { count: 0, resetAt: now + windowMs };
+    if (now > record.resetAt) {
+        record.count = 0;
+        record.resetAt = now + windowMs;
+    }
+    record.count += 1;
+    rateLimitMap.set(key, record);
+    return { count: record.count, resetAt: record.resetAt, exceeded: record.count > max };
+}
+
+async function hitRedis(redis, key, windowMs, max) {
+    // INCR then EXPIRE-on-first-hit is the standard fixed-window counter. Both
+    // commands go in one pipeline so it is a single round trip, and the TTL is
+    // only set when the counter was just created (count === 1) so the window
+    // does not slide forward on every request.
+    const redisKey = `ratelimit:${key}`;
+    const [[, count]] = await redis.multi().incr(redisKey).exec();
+    if (count === 1) await redis.pexpire(redisKey, windowMs);
+    const ttl = await redis.pttl(redisKey);
+    return {
+        count,
+        resetAt: Date.now() + (ttl > 0 ? ttl : windowMs),
+        exceeded: count > max,
+    };
+}
+
 function createRateLimit(windowMs, max, message) {
-    return (req, res, next) => {
-        const key = req.ip + req.path;
-        const now = Date.now();
-        const record = rateLimitMap.get(key) || { count: 0, resetAt: now + windowMs };
-        if (now > record.resetAt) {
-            record.count = 0;
-            record.resetAt = now + windowMs;
+    return async (req, res, next) => {
+        // baseUrl + path, not req.path alone. Inside app.use('/api/v1/auth/
+        // verify-otp', ...) req.path is just '/', so verify-otp and
+        // forgot-password were sharing a single 5-attempt budget. baseUrl
+        // restores the mount prefix; the query string is deliberately excluded
+        // so ?x=1 cannot mint a fresh bucket.
+        const key = `${req.ip}:${req.baseUrl}${req.path}`;
+        let result;
+
+        const redis = getRedis();
+        if (redis && isRedisReady()) {
+            try {
+                result = await hitRedis(redis, key, windowMs, max);
+            } catch {
+                // Redis blipped — fall through to the Map rather than 500.
+                result = hitInMemory(key, windowMs, max);
+            }
+        } else {
+            result = hitInMemory(key, windowMs, max);
         }
-        record.count += 1;
-        rateLimitMap.set(key, record);
-        if (record.count > max) {
+
+        // Standard headers so clients can back off intelligently instead of
+        // hammering until they get a 429.
+        res.setHeader('RateLimit-Limit', max);
+        res.setHeader('RateLimit-Remaining', Math.max(0, max - result.count));
+        res.setHeader('RateLimit-Reset', Math.ceil((result.resetAt - Date.now()) / 1000));
+
+        if (result.exceeded) {
+            res.setHeader('Retry-After', Math.ceil((result.resetAt - Date.now()) / 1000));
             return res.status(429).json({ success: false, message });
         }
         next();
@@ -132,8 +202,41 @@ app.use(cookieParser());
 // the routers). Fire-and-forget — never blocks or fails a request.
 app.use(apiLogger);
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+// Liveness: is this process up at all? Always 200 while we can answer. Shape is
+// unchanged from before (status + timestamp) so existing callers keep working;
+// the dependency detail is additive.
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: Math.round(process.uptime()),
+        dependencies: dependencyStates(),
+    });
+});
+
+// Readiness: can this process actually serve traffic? 503 when Mongo is not
+// connected, because every meaningful route needs it. Redis is reported but
+// never gates readiness — it is optional by design, see utils/redis.js.
+// This is what the container healthchecks probe, so an unhealthy container
+// means "cannot serve", not merely "process exists".
+app.get('/health/ready', (req, res) => {
+    const dependencies = dependencyStates();
+    const ready = dependencies.mongo === 'connected';
+    res.status(ready ? 200 : 503).json({
+        status: ready ? 'ready' : 'not-ready',
+        timestamp: new Date().toISOString(),
+        dependencies,
+    });
+});
+
+function dependencyStates() {
+    // 0 disconnected, 1 connected, 2 connecting, 3 disconnecting
+    const MONGO_STATES = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    return {
+        mongo: MONGO_STATES[mongoose.connection.readyState] ?? 'unknown',
+        redis: !isRedisConfigured() ? 'not-configured' : isRedisReady() ? 'connected' : 'unavailable',
+    };
+}
 
 // Routes
 app.use('/api/v1/auth/verify-otp', otpLimiter);
