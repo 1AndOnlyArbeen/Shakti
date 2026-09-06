@@ -18,6 +18,7 @@ import Map from './Map';
 import OptionsSheet from './OptionsSheet';
 import SearchSheet from './SearchSheet';
 import useRideFlow, { VEHICLE_TYPES } from './useRideFlow';
+import useBackHandler from '../../utils/useBackHandler';
 
 export default function HomeScreen({ onOpenSubscription }) {
   const flow = useRideFlow();
@@ -51,6 +52,15 @@ export default function HomeScreen({ onOpenSubscription }) {
   } = flow;
 
   const [mapTarget, setMapTarget] = useState('dest');
+
+  // Hardware back retraces the booking flow (bidding → options → search → home).
+  // Deliberately excludes 'active': backing out of a live trip should be a
+  // conscious tap on the sheet, not a stray back press.
+  useBackHandler(() => {
+    if (step === 'home' || step === 'active') return false;
+    goBack();
+    return true;
+  });
 
   const goToOptions = (dest, coords = null) => {
     setDestination(dest);

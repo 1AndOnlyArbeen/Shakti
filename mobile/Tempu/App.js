@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, ToastAndroid, View } from 'react-native';
 import { useFonts, BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque';
 import {
   PlusJakartaSans_400Regular,
@@ -30,6 +30,7 @@ import SupportScreen from './screens/SupportScreen';
 import TripsScreen from './screens/TripsScreen';
 import { colors, isDark } from './theme/colors';
 import { STATUS_TOP_PAD } from './theme';
+import useBackHandler, { BACK_DEPTH } from './utils/useBackHandler';
 
 // App is a white (Uber-style light) theme, so the status bar needs dark icons.
 const STATUS_BAR_STYLE = 'dark-content';
@@ -108,6 +109,34 @@ function AppShell() {
   useEffect(() => {
     if (user && role === 'passenger') setTab('home');
   }, [user, role]);
+
+  // Android hardware back. Walk back through our own screens instead of letting
+  // the OS drop the user straight out of the app; only a second press on a root
+  // screen actually exits. Deeper screens (HomeScreen's sheets, DriverShell,
+  // Support threads) register their own handlers and get first refusal.
+  const lastExitPress = useRef(0);
+  const confirmExit = () => {
+    const now = Date.now();
+    if (now - lastExitPress.current < 2000) return false; // second press → exit
+    lastExitPress.current = now;
+    if (Platform.OS === 'android') ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+    return true;
+  };
+
+  useBackHandler(() => {
+    if (!user) {
+      if (authScreen === 'otp') { setAuthScreen('register'); return true; }
+      if (authScreen !== 'role-select') { setAuthScreen('role-select'); return true; }
+      return confirmExit();
+    }
+    if (authScreen === 'driver-vehicle') { setAuthScreen('otp'); return true; }
+    if (authScreen === 'driver-pending') return confirmExit();
+    if (effectiveMode === 'driver') return confirmExit(); // DriverShell handled its own first
+    if (menuOpen) { setMenuOpen(false); return true; }
+    if (overlay) { setOverlay(null); return true; }
+    if (tab !== 'home') { setTab('home'); return true; }
+    return confirmExit();
+  }, { depth: BACK_DEPTH.app });
 
   if (loading) {
     return (

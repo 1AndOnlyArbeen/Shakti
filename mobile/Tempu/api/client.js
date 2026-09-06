@@ -4,12 +4,18 @@ import { tokenStore } from './tokenStore';
 // For Android emulator: 10.0.2.2 maps to your machine's localhost
 // For iOS simulator:    localhost works fine
 // For physical device:  set EXPO_PUBLIC_API_URL to your machine's LAN IP
-//   e.g. EXPO_PUBLIC_API_URL=http://192.168.1.100:8000/api/v1
+//   e.g. EXPO_PUBLIC_API_URL=http://192.168.1.100:8002/api/v1
+// 8002 is the backend dev port (backend/.env, docker-compose, Makefile all agree).
 export const BASE_URL =
   process.env.EXPO_PUBLIC_API_URL ||
   (Platform.OS === 'android'
-    ? 'http://10.0.2.2:8001/api/v1'
-    : 'http://localhost:8001/api/v1');
+    ? 'http://10.0.2.2:8002/api/v1'
+    : 'http://localhost:8002/api/v1');
+
+// Without this, an unreachable backend (spun-down host that completes the TLS
+// handshake and then never answers) leaves every screen spinning until RN's
+// own socket timeout — minutes on Android. Fail fast with a real message.
+const REQUEST_TIMEOUT_MS = 15000;
 
 let isRefreshing = false;
 let waitQueue = [];
@@ -22,10 +28,10 @@ function flushQueue(err, token) {
 async function doRefresh() {
   const { refreshToken } = tokenStore.get();
   if (!refreshToken) throw new Error('No refresh token');
-  const res = await fetch(`${BASE_URL}/auth/refresh-token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Client': 'mobile' },
-    body: JSON.stringify({ refreshToken }),
+  // Via rawFetch so the refresh call gets the same timeout as everything else.
+  const res = await rawFetch('POST', '/auth/refresh-token', { refreshToken }, {
+    'Content-Type': 'application/json',
+    'X-Client': 'mobile',
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json.message || 'Token refresh failed');
@@ -35,11 +41,18 @@ async function doRefresh() {
 }
 
 async function rawFetch(method, path, body, headers) {
-  return fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function request(method, path, body, opts = {}) {

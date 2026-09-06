@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -28,6 +29,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { userApi } from '../api/user.api';
 import { colors } from '../theme/colors';
+import useBackHandler from '../utils/useBackHandler';
 import { type, radius, spacing } from '../theme';
 import { getThemeMode, setThemeMode } from '../theme/themeStore';
 import { reloadApp } from '../theme/reload';
@@ -79,6 +81,7 @@ export default function ProfileScreen({ onBack, onSignOut, onOpenSubscription, o
   const [rideReminders, setRideReminders] = useState(true);
   const [avatarUri, setAvatarUri] = useState(user?.avatarUrl || null);
   const [driverOverlay, setDriverOverlay] = useState(null); // null | 'vehicle' | 'pending'
+  const [refreshing, setRefreshing] = useState(false);
 
   const [profile, setProfile] = useState({
     name: user?.name || '',
@@ -86,6 +89,20 @@ export default function ProfileScreen({ onBack, onSignOut, onOpenSubscription, o
     email: user?.email || '',
     walletBalance: user?.walletBalance || 0,
   });
+
+  // Mirror the context user into local form state so a pull-to-refresh (which
+  // re-fetches the profile) actually shows the new name / wallet balance.
+  useEffect(() => {
+    if (!user) return;
+    setProfile((p) => ({
+      ...p,
+      name: user.name || '',
+      phone: user.phone || '',
+      email: user.email || '',
+      walletBalance: user.walletBalance ?? p.walletBalance,
+    }));
+  }, [user]);
+
   const [addresses, setAddresses] = useState([]);
   const [tfaEnabled, setTfaEnabled] = useState(false);
   const [modal, setModal] = useState(null);
@@ -135,23 +152,42 @@ export default function ProfileScreen({ onBack, onSignOut, onOpenSubscription, o
 
   const isDriver = driverStatus === 'approved';
 
-  // Load saved addresses + check driver profile on mount
-  useEffect(() => {
-    userApi.getSavedAddresses().then((res) => {
-      setAddresses(res.data || []);
-    }).catch(() => {});
+  // Load saved addresses + check driver profile. Reused by pull-to-refresh.
+  const load = useCallback(async () => {
+    await Promise.all([
+      userApi.getSavedAddresses().then((res) => {
+        setAddresses(res.data || []);
+      }).catch(() => {}),
 
-    userApi.getMyDriverProfile().then((res) => {
-      const dp = res.data?.driver || res.data;
-      setDriverProfile(dp);
-      setDriverStatus(dp?.status || null);
-      setOnline(dp?.isOnline ?? false);
-    }).catch(() => {
-      setDriverStatus(null);
-    }).finally(() => {
-      setDriverLoaded(true);
-    });
+      userApi.getMyDriverProfile().then((res) => {
+        const dp = res.data?.driver || res.data;
+        setDriverProfile(dp);
+        setDriverStatus(dp?.status || null);
+        setOnline(dp?.isOnline ?? false);
+      }).catch(() => {
+        setDriverStatus(null);
+      }).finally(() => {
+        setDriverLoaded(true);
+      }),
+    ]);
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    // refreshUser repopulates name/phone/email/wallet from the server.
+    await Promise.all([load(), refreshUser?.().catch(() => {})]);
+    setRefreshing(false);
+  }, [load, refreshUser]);
+
+  // Hardware back closes whichever full-screen overlay is on top. The modals
+  // below are RN <Modal>s, which already close themselves via onRequestClose.
+  useBackHandler(() => {
+    if (driverOverlay) { setDriverOverlay(null); return true; }
+    if (helpView) { setHelpView(null); return true; }
+    return false;
+  });
 
   const toggleOnline = useCallback(async (val) => {
     setOnline(val);
@@ -268,6 +304,9 @@ export default function ProfileScreen({ onBack, onSignOut, onOpenSubscription, o
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
       >
         <View style={styles.hero}>
           <View style={styles.heroDecorA} />

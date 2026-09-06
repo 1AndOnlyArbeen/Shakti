@@ -2,6 +2,7 @@ import { MessageSquare } from '@/components/ui/icons'
 import { PageHeader } from '../../components/shared/PageHeader'
 import { EmptyState } from '../../components/shared/EmptyState'
 import { ChatPanel } from '../../components/ai/ChatPanel'
+import { AGENTIC_SUGGESTIONS, agenticStorageKey } from '../../components/ai/agentic'
 import { knowledgeApi } from '../../api/knowledge.api'
 import { useAuthStore, hasPermission } from '../../store/authStore'
 import agentLogo from '@/assets/agent-logo.png'
@@ -28,13 +29,6 @@ export default function Ai() {
     </div>
   )
 }
-
-const AGENTIC_SUGGESTIONS = [
-  'How many support tickets do we have?',
-  'Show me the pending document queue',
-  'How much revenue did we make this month?',
-  'Any API errors today?',
-]
 
 // ── Agentic: a tool-calling chat over LIVE app data that can also PREPARE
 // changes (notifications, ticket replies, approvals, payouts, pricing…). Gated
@@ -68,7 +62,7 @@ function AgenticSection() {
       sendFn={(text, history, image) => knowledgeApi.agenticChat(text, history, image)}
       actionFn={(token) => knowledgeApi.agenticAction(token)}
       allowImage
-      storageKey={`tempu-agentic-chat:${admin?._id || 'anon'}`}
+      storageKey={agenticStorageKey(admin)}
     />
   )
 }

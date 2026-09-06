@@ -10,6 +10,7 @@ import SupportScreen from '../SupportScreen';
 import DriverEarnings from './DriverEarnings';
 import DriverHome from './DriverHome';
 import useDriverFlow from './useDriverFlow';
+import useBackHandler, { BACK_DEPTH } from '../../utils/useBackHandler';
 
 const TABS = [
   { id: 'home', label: 'Drive', icon: 'car-sport' },
@@ -221,6 +222,15 @@ export default function DriverShell({ initialOnline, onSwitchToPassenger, onSign
 
   // While driving an active trip, lock the tabs to the Drive screen.
   const drivingLocked = !!flow.activeTrip && flow.activeTrip.status !== 'completed';
+
+  // Hardware back inside driver mode: close what's on top, then fall back to
+  // the Drive tab. Unhandled presses bubble to AppShell's exit confirmation.
+  useBackHandler(() => {
+    if (sosOpen) { setSosOpen(false); return true; }
+    if (overlay) { setOverlay(null); return true; }
+    if (tab !== 'home') { setTab('home'); return true; }
+    return false;
+  }, { depth: BACK_DEPTH.shell });
 
   if (overlay === 'notifications') {
     return (

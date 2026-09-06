@@ -67,6 +67,13 @@ export function ChatPanel({
   icon: Icon = MessageSquare, title, subtitle, emptyTitle, emptyHint,
   suggestions = [], placeholder, footerNote, sendFn, actionFn = null,
   showSources = false, allowImage = false, storageKey = null,
+  // Layout knobs so the same panel works full-page and inside the floating
+  // widget: `className`/`style` size the shell, `dense` tightens the padding for
+  // a narrow column, `suggestionLayout="list"` stacks the starter prompts as
+  // full-width rows instead of wrapped chips, and `onClose` adds a dismiss
+  // button beside "New chat".
+  className, style = { height: '85vh' }, dense = false,
+  suggestionLayout = 'chips', onClose = null,
 }) {
   const [messages, setMessages] = useState(() => loadStoredMessages(storageKey)) // { role: 'user' | 'model', text, sources?, images?, image?, hadImage?, actions? }
   const [input, setInput] = useState('')
@@ -187,7 +194,7 @@ export function ChatPanel({
   }
 
   return (
-    <section className="bg-white rounded-xl border border-gray-200 flex flex-col" style={{ height: '85vh' }}>
+    <section className={cn('bg-white rounded-xl border border-gray-200 flex flex-col', className)} style={style}>
       <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-100 shrink-0">
         <Icon className="h-4 w-4 text-orange-500" />
         <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
@@ -200,21 +207,42 @@ export function ChatPanel({
         >
           <Plus className="h-3.5 w-3.5" /> New chat
         </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+            aria-label="Close chat"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="max-w-4xl mx-auto px-6 py-6">
+        <div className={cn('max-w-4xl mx-auto', dense ? 'px-4 py-4' : 'px-6 py-6')}>
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center py-16">
               <Sparkles className="h-7 w-7 text-orange-300 mb-3" />
               <p className="text-base font-semibold text-gray-900">{emptyTitle}</p>
               <p className="text-sm text-gray-400 mt-1 mb-5">{emptyHint}</p>
-              <div className="flex flex-wrap gap-2 justify-center max-w-md">
+              <div
+                className={cn(
+                  suggestionLayout === 'list'
+                    ? 'w-full max-w-sm flex flex-col gap-1.5'
+                    : 'flex flex-wrap gap-2 justify-center max-w-md'
+                )}
+              >
                 {suggestions.map((s) => (
                   <button
                     key={s}
                     onClick={() => sendMessage(s)}
-                    className="text-xs px-3 py-1.5 rounded-full bg-white border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600 transition-colors"
+                    className={cn(
+                      'text-xs bg-white border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600 transition-colors',
+                      suggestionLayout === 'list'
+                        ? 'w-full text-left px-3 py-2 rounded-lg hover:bg-orange-50/40'
+                        : 'px-3 py-1.5 rounded-full'
+                    )}
                   >
                     {s}
                   </button>
@@ -279,7 +307,7 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="border-t border-gray-100 p-4 shrink-0">
+      <div className={cn('border-t border-gray-100 shrink-0', dense ? 'p-3' : 'p-4')}>
         <form onSubmit={submit} className="max-w-4xl mx-auto">
           {/* Attached-image preview */}
           {image && (

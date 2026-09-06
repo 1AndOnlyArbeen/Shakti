@@ -205,16 +205,17 @@ const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.background },
 
   header: {
-    height: 64,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 28 : 12,
+    paddingBottom: 16,
     backgroundColor: colors.surface,
   },
   brand: {
-    height: 28,
-    width: 74,
+    height: 44,
+    width: 118,
   },
   headerBtn: {
     width: 40,

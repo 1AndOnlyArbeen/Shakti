@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom'
 import { Menu } from '@/components/ui/icons'
 import { cn } from '../../utils/cn'
 import { Sidebar } from './Sidebar'
+import { AiWidget } from '../ai/AiWidget'
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)   // mobile drawer
@@ -42,6 +43,9 @@ export default function Layout() {
           </div>
         </main>
       </div>
+
+      {/* Tempu Ai, one click away from every screen */}
+      <AiWidget />
     </div>
   )
 }

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   LayoutGrid, Users, Car, Navigation, Repeat, CreditCard, FileText,
   MessageSquare, Building2, BarChart2, Shield, Bell, X, Banknote, Coins, Siren,
-  ChevronDown, Settings, ChevronsLeft, LogOut, BookOpen, Sparkles, History, MapPin,
+  ChevronDown, Settings, ChevronsLeft, LogOut, BookOpen, History, MapPin,
 } from '@/components/ui/icons'
 import logoIcon from '@/assets/logo-icon.png'
 import logoWordmark from '@/assets/logo-wordmark.png'
@@ -101,7 +101,6 @@ const navSections = [
     label: 'HemaWati',
     icon: ClaudeIcon,
     items: [
-      { to: '/agentic', label: 'Tempu AI', icon: Sparkles, permission: null },
       { to: '/rag', label: 'Tempu RAG', icon: BookOpen, permission: 'manageKnowledge' },
     ],
   },

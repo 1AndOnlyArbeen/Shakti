@@ -5,13 +5,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable,
-  ScrollView, StyleSheet, Text, TextInput, View,
+  RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { userApi } from '../api/user.api';
 import RatingCard from '../components/RatingCard';
 import { Button, Chip, FormField, ScreenHeader } from '../components/ui';
 import CallScreen from './CallScreen';
 import { colors, radius, spacing, type } from '../theme';
+import useBackHandler from '../utils/useBackHandler';
 
 const CATEGORIES = [
   { key: 'trip_issue', label: 'Trip issue' },
@@ -35,6 +36,7 @@ export default function SupportScreen({ onBack, role }) {
   const [view, setView] = useState('list'); // 'list' | 'new' | 'thread'
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [active, setActive] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -78,6 +80,13 @@ export default function SupportScreen({ onBack, role }) {
   }, []);
 
   useEffect(() => { loadTickets(); }, [loadTickets]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    loadSettings();
+    await loadTickets();
+    setRefreshing(false);
+  }, [loadSettings, loadTickets]);
 
   // Live-refresh the open ticket so new replies appear without a manual refresh.
   useEffect(() => {
@@ -249,6 +258,14 @@ export default function SupportScreen({ onBack, role }) {
     else { setView('list'); setActive(null); loadTickets(); }
   };
 
+  // Hardware back mirrors the header chevron: out of a thread/new-ticket form
+  // first, and only then out of Support altogether (handled by the shell).
+  useBackHandler(() => {
+    if (view === 'list') return false;
+    back();
+    return true;
+  });
+
   return (
     <View style={styles.root}>
       <ScreenHeader
@@ -262,7 +279,12 @@ export default function SupportScreen({ onBack, role }) {
       {/* LIST */}
       {view === 'list' && (
         loading ? <Centered /> : (
-          <ScrollView contentContainerStyle={styles.content}>
+          <ScrollView
+            contentContainerStyle={styles.content}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            }
+          >
             {tickets.length === 0 ? (
               <Text style={styles.empty}>No support tickets yet. Tap + to start one.</Text>
             ) : tickets.map((t) => (
